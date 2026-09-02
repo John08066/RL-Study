@@ -12,15 +12,22 @@
 
 ## 环境与运行
 
-在仓库根目录执行：
+在仓库根目录按顺序执行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r .\rl_projects\01_tabular_q_learning_cliffwalking\requirements.txt
 .\.venv\Scripts\python.exe .\rl_projects\01_tabular_q_learning_cliffwalking\src\train.py --episodes 1000
 .\.venv\Scripts\python.exe -m unittest discover -s .\rl_projects\01_tabular_q_learning_cliffwalking\tests -v
+.\.venv\Scripts\python.exe .\rl_projects\01_tabular_q_learning_cliffwalking\src\demo.py --pause
 ```
 
 首条安装命令假设根目录 `.venv` 已由项目初始化步骤创建。训练会把可复现实验结果写进 `artifacts/`（被 Git 忽略）。本例不需要数据集，也不需要 4090。
+
+## 如何观察它实际运作
+
+1. 运行 `train.py`：它执行 1000 个回合的“探索 → 与环境交互 → Q-learning 更新”，并保存 `artifacts/q_table.npy`。最后的训练回报会受探索影响；重点看 100 回合纯贪婪评估，通常为 -13。
+2. 运行测试命令：它验证终止转移不会再加上错误的未来价值。
+3. 运行 `demo.py --pause`：每按一次 Enter 执行一个贪婪动作。网格中 `A` 是智能体，`C` 是悬崖，`G` 是目标；最优演示应经过 13 步、总回报为 -13，且 `reached_goal=True`。
 
 ## 预期检查点
 
