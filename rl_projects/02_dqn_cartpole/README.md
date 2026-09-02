@@ -4,7 +4,7 @@
 
 与 01_tabular_q_learning_cliffwalking 的核心区别是：这里的连续状态 s ∈ R^4 无法建立有限 Q 表，所以使用网络 Q_θ(s, a) 近似两个动作的价值。训练仍使用 Q-learning 目标，但增加了经验回放与目标网络来稳定更新。
 
-为让小型 CPU 训练更稳定，代码仅对“杆倒下”的训练转移使用 -10 奖励；评估和 GIF 仍报告环境的原始回报（每存活一步为 +1）。这不会改变环境动力学或最优策略，只让失败的 TD 信号更清晰。
+训练奖励、MLP 隐藏层维度、MSE 损失、回放容量、指数 epsilon 衰减、训练回合数和目标网络更新频率均采用上游 notebook 默认值。唯一算法修正见 UPSTREAM_SOURCE.md。
 
 ## 独立环境与运行
 
@@ -13,7 +13,7 @@
 ~~~powershell
 ./.venv/Scripts/python.exe -m venv ./rl_projects/02_dqn_cartpole/.venv
 ./rl_projects/02_dqn_cartpole/.venv/Scripts/python.exe -m pip install -r ./rl_projects/02_dqn_cartpole/requirements.txt
-./rl_projects/02_dqn_cartpole/.venv/Scripts/python.exe ./rl_projects/02_dqn_cartpole/src/train.py --episodes 600
+./rl_projects/02_dqn_cartpole/.venv/Scripts/python.exe ./rl_projects/02_dqn_cartpole/src/train.py --episodes 200
 ./rl_projects/02_dqn_cartpole/.venv/Scripts/python.exe -m unittest discover -s ./rl_projects/02_dqn_cartpole/tests -v
 ./rl_projects/02_dqn_cartpole/.venv/Scripts/python.exe ./rl_projects/02_dqn_cartpole/src/demo.py
 ~~~
@@ -22,7 +22,7 @@
 
 ## 如何观察实际效果
 
-demo.py 加载训练权重，以纯贪婪策略控制 CartPole，并把环境状态绘制为 artifacts/cartpole_demo.gif。输出中的 return 是保持平衡的步数；接近 200 表示已完成书中的 CartPole-v0 难度。训练带随机性：若平均评估回报明显低于 180，请把训练命令的 --episodes 提高到 900 后重新训练。
+demo.py 加载训练权重，以纯贪婪策略控制 CartPole，并把环境状态绘制为 artifacts/cartpole_demo.gif。输出中的 return 是保持平衡的步数；接近 200 表示已完成书中的 CartPole-v0 难度。若 200 回合的上游默认配置未收敛，应记录结果后再增加回合数，而不改变上游超参数。
 
 ## 从 Q-learning 到 DQN
 

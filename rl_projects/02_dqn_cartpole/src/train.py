@@ -1,7 +1,9 @@
 from __future__ import annotations  # 延迟解析类型标注。
 
 import argparse  # 读取命令行超参数。
+import copy  # 为上游目标网络创建独立参数副本。
 import json  # 保存实验指标。
+import math  # 计算上游的指数 epsilon 衰减。
 import random  # 固定回放采样的随机性。
 from collections import deque  # 实现固定容量经验池。
 from dataclasses import dataclass  # 表示一条环境转移。
@@ -41,11 +43,11 @@ class QNetwork(nn.Module):  # 近似 Q_theta(s, a)，输出两个动作价值。
     def __init__(self, n_states: int, n_actions: int) -> None:
         super().__init__()  # 初始化 PyTorch 基类。
         self.layers = nn.Sequential(  # 输入 (batch, 4)，输出 (batch, 2)。
-            nn.Linear(n_states, 128),  # 状态特征线性投影。
+            nn.Linear(n_states, 256),  # 上游 MLP 的第一隐藏层维度。
             nn.ReLU(),  # 增加非线性表达能力。
-            nn.Linear(128, 128),  # 第二隐藏层。
+            nn.Linear(256, 256),  # 上游 MLP 的第二隐藏层维度。
             nn.ReLU(),  # 第二次非线性变换。
-            nn.Linear(128, n_actions),  # 每个离散动作一个 Q 值。
+            nn.Linear(256, n_actions),  # 上游 MLP 为每个离散动作输出 Q 值。
         )
 
     def forward(self, states: torch.Tensor) -> torch.Tensor:
@@ -59,10 +61,9 @@ def td_targets(next_q: torch.Tensor, rewards: torch.Tensor, dones: torch.Tensor,
 class DQNAgent:  # 维护在线网络、目标网络和一次梯度更新。
     def __init__(self, n_states: int, n_actions: int, learning_rate: float, gamma: float, seed: int) -> None:
         self.online_net = QNetwork(n_states, n_actions)  # 被优化的 Q_theta。
-        self.target_net = QNetwork(n_states, n_actions)  # 构造固定 TD 目标的 Q_theta_minus。
-        self.target_net.load_state_dict(self.online_net.state_dict())  # 两网从相同参数开始。
+        self.target_net = copy.deepcopy(self.online_net)  # 修复上游同一模型引用，使目标网络独立但初始相同。
         self.optimizer = torch.optim.Adam(self.online_net.parameters(), lr=learning_rate)  # 更新在线网络参数。
-        self.loss_fn = nn.SmoothL1Loss()  # Huber 损失降低异常 TD 误差影响。
+        self.loss_fn = nn.MSELoss()  # 对齐上游 DQN.ipynb 的 MSE TD 损失。
         self.gamma = gamma  # 折扣因子。
         self.n_actions = n_actions  # 随机探索时需要的动作数。
         self.rng = np.random.default_rng(seed)  # ε-greedy 的随机数发生器。
@@ -127,21 +128,19 @@ def train(episodes: int, learning_rate: float, gamma: float, epsilon_start: floa
         done = False  # 初始化终止标志。
         episode_return = 0.0  # 初始化训练回报。
         while not done:
-            fraction = min(total_steps / epsilon_decay_steps, 1.0)  # 映射到 [0, 1]。
-            epsilon = epsilon_start + fraction * (epsilon_end - epsilon_start)  # 线性衰减探索率。
+            epsilon = epsilon_end + (epsilon_start - epsilon_end) * math.exp(-total_steps / epsilon_decay_steps)  # 对齐上游的指数 epsilon 衰减。
             action = agent.select_action(state, epsilon)  # ε-greedy 行为策略。
             next_state, reward, terminated, truncated, _ = env.step(action)  # 获得真实转移。
             done = terminated or truncated  # 合并 Gymnasium 的两类结束。
-            learning_reward = -10.0 if terminated else reward  # 对失败终止给出清晰负 TD 信号；时间上限仍保留原始奖励。
-            replay.append(Transition(state, action, learning_reward, next_state, done))  # 将用于 DQN 更新的奖励写入回放池。
+            replay.append(Transition(state, action, reward, next_state, done))  # 对齐上游，直接保存环境原始奖励。
             state = next_state  # 推进状态。
             episode_return += reward  # 累积本回合奖励。
             total_steps += 1  # 增加全局环境步数。
             if len(replay) >= max(batch_size, warmup_steps):  # 预热后再开始批量学习。
                 agent.update(replay.sample(batch_size))  # 随机回放历史经验。
-            if total_steps % target_sync_steps == 0:  # 到达目标网络同步间隔。
-                agent.sync_target()  # 复制在线网络参数。
         returns.append(episode_return)  # 保存训练曲线点。
+        if (episode + 1) % target_sync_steps == 0:  # 对齐上游，按训练回合同步目标网络。
+            agent.sync_target()  # 复制在线网络参数。
 
     score = evaluate(agent, episodes=30, seed=seed + episodes)  # 用纯贪婪策略评估。
     env.close()  # 释放训练环境。
@@ -150,16 +149,16 @@ def train(episodes: int, learning_rate: float, gamma: float, epsilon_start: floa
 
 def main() -> None:
     parser = argparse.ArgumentParser()  # 创建命令行接口。
-    parser.add_argument("--episodes", type=int, default=600)  # 训练回合数。
-    parser.add_argument("--learning-rate", type=float, default=1e-3)  # Adam 学习率。
-    parser.add_argument("--gamma", type=float, default=0.99)  # 折扣因子。
-    parser.add_argument("--epsilon-start", type=float, default=1.0)  # 初始探索率。
-    parser.add_argument("--epsilon-end", type=float, default=0.02)  # 最终探索率。
-    parser.add_argument("--epsilon-decay-steps", type=int, default=8_000)  # 衰减所跨的环境步数。
+    parser.add_argument("--episodes", type=int, default=200)  # 上游配置的训练回合数。
+    parser.add_argument("--learning-rate", type=float, default=1e-4)  # 上游 Adam 学习率。
+    parser.add_argument("--gamma", type=float, default=0.95)  # 上游折扣因子。
+    parser.add_argument("--epsilon-start", type=float, default=0.95)  # 上游初始探索率。
+    parser.add_argument("--epsilon-end", type=float, default=0.01)  # 上游最终探索率。
+    parser.add_argument("--epsilon-decay-steps", type=int, default=500)  # 上游指数衰减尺度。
     parser.add_argument("--batch-size", type=int, default=64)  # 每次更新的样本数。
-    parser.add_argument("--buffer-size", type=int, default=10_000)  # 回放池容量。
+    parser.add_argument("--buffer-size", type=int, default=100_000)  # 上游回放池容量。
     parser.add_argument("--warmup-steps", type=int, default=1_000)  # 首次更新前收集的经验数。
-    parser.add_argument("--target-sync-steps", type=int, default=250)  # 目标网络同步间隔。
+    parser.add_argument("--target-sync-steps", type=int, default=4)  # 上游按回合进行的目标网络同步间隔。
     parser.add_argument("--seed", type=int, default=42)  # 实验随机种子。
     args = parser.parse_args()  # 解析参数。
 
